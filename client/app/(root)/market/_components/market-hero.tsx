@@ -62,7 +62,7 @@ const MarketHero = () => {
       </div>
       <Marquee
         pauseOnHover
-        className="mb-16 bg-[#FCCD29] py-4 sm:h-20 sm:py-0 md:mb-40"
+        className="mb-16 bg-[#FCCD29] dark:bg-[#1a2e1c] dark:border-y dark:border-primary/20 py-4 sm:h-20 sm:py-0 md:mb-40"
       >
         <div className="flex items-center space-x-5">
           {Array.from({ length: 10 }).map((_, index) => (
@@ -71,7 +71,7 @@ const MarketHero = () => {
               <Link
                 href="https://x.com/AgricCylo"
                 target="_blank"
-                className="bg-foreground flex h-11 items-center justify-center gap-2 rounded-full py-1.5 pr-3 pl-2 last-of-type:mr-5"
+                className="bg-canvas-dark flex h-11 items-center justify-center gap-2 rounded-full py-1.5 pr-3 pl-2 last-of-type:mr-5"
               >
                 <Avatar className="size-7">
                   <AvatarImage />

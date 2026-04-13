@@ -2,7 +2,7 @@
   {
     "id": "prod-001",
     "name": "Fresh Tomatoes Basket",
-    "image": "https://images.unsplash.com/photo-1546470427-0d4db154ceb8?w=600",
+    "image": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=600",
     "price": 12.99,
     "unit": "basket",
     "category": "vegetables",
@@ -26,7 +26,7 @@
   {
     "id": "prod-002",
     "name": "Green Bell Peppers",
-    "image": "https://images.unsplash.com/photo-1563565375-f3fdfdbefa83?w=600",
+    "image": "https://images.unsplash.com/photo-1508747703725-719777637510?w=600",
     "price": 8.5,
     "unit": "kg",
     "category": "vegetables",
@@ -74,7 +74,7 @@
   {
     "id": "prod-004",
     "name": "Organic Carrots Bundle",
-    "image": "https://images.unsplash.com/photo-1598170845058-32b9d6a5da37?w=600",
+    "image": "https://images.unsplash.com/photo-1445282768818-728615cc910a?w=600",
     "price": 9.25,
     "unit": "bundle",
     "category": "vegetables",
@@ -146,7 +146,7 @@
   {
     "id": "prod-007",
     "name": "Groundnut Oil",
-    "image": "https://images.unsplash.com/photo-1474979266404-7eaacdc26f49?w=600",
+    "image": "https://images.unsplash.com/photo-1474546652694-a33dd8161d66?w=600",
     "price": 22.0,
     "unit": "litre",
     "category": "oils",

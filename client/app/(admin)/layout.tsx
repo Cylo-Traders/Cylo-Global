@@ -1,22 +1,22 @@
-import { DashboardSidebar } from "./_components/dashboard-sidebar";
-import { DashboardHeader } from "./_components/dashboard-header";
+import { AdminSidebar } from "./_components/admin-sidebar";
+import { AdminHeader } from "./_components/admin-header";
 import { DashboardFooter } from "@/components/shared/dashboard-footer";
 
 export const metadata = {
   title: {
-    template: "%s | Cylo Dashboard",
-    default: "Dashboard",
+    template: "%s | Cylo Admin",
+    default: "Admin Dashboard",
   },
 };
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+export default function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen">
       <div className="hidden lg:block">
-        <DashboardSidebar />
+        <AdminSidebar />
       </div>
       <div className="flex flex-1 flex-col overflow-hidden">
-        <DashboardHeader />
+        <AdminHeader />
         <main className="flex-1 overflow-y-auto p-6" data-lenis-prevent>{children}</main>
         <DashboardFooter />
       </div>

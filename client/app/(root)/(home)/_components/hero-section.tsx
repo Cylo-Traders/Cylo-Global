@@ -39,7 +39,7 @@ const HomeHeroSection = () => {
           <Link
             href="https://www.starknet.io/"
             target="_blank"
-            className="bg-background mt-6 inline-flex items-center gap-3 rounded-full border px-3.5 py-1.5"
+            className="bg-background/80 backdrop-blur-sm mt-6 inline-flex items-center gap-3 rounded-full border px-3.5 py-1.5"
           >
             <span className="text-[13px] font-medium">Powered by</span>{" "}
             <Image
@@ -49,6 +49,16 @@ const HomeHeroSection = () => {
               height={14}
               priority
               quality={100}
+              className="dark:hidden"
+            />
+            <Image
+              src="/assets/starknet-light.svg"
+              alt="starknet"
+              width={85}
+              height={14}
+              priority
+              quality={100}
+              className="hidden dark:block"
             />
           </Link>
 

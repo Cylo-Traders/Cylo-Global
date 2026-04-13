@@ -43,15 +43,15 @@ const HowItWorks = () => {
         {howItWorksData.map((item, index) => (
           <div
             key={index}
-            className="flex-1 rounded-[50px] bg-[#FCCD29] p-8 shadow-lg transition-all delay-150 duration-300 md:hover:-translate-y-3 md:hover:scale-105 md:hover:shadow-2xl lg:px-[38px] lg:py-[51px]"
+            className="flex-1 rounded-[50px] bg-[#FCCD29] p-8 shadow-lg transition-all delay-150 duration-300 dark:bg-[#1a2e1c] dark:border dark:border-primary/20 dark:shadow-none md:hover:-translate-y-3 md:hover:scale-105 md:hover:shadow-2xl lg:px-[38px] lg:py-[51px]"
           >
-            <div className="bg-foreground mb-4 flex size-[100px] items-center justify-center rounded-full">
-              <item.icon className="size-10 text-white" />
+            <div className="bg-canvas-dark mb-4 flex size-[100px] items-center justify-center rounded-full dark:bg-primary/20 dark:border dark:border-primary/30">
+              <item.icon className="size-10 text-white dark:text-primary" />
             </div>
-            <h3 className="font-display mt-16 mb-8 max-w-[246px] text-lg font-semibold md:text-xl">
+            <h3 className="font-display mt-16 mb-8 max-w-[246px] text-lg font-semibold md:text-xl dark:text-foreground">
               {item.title}
             </h3>
-            <p className="text-base">{item.description}</p>
+            <p className="text-base dark:text-muted-foreground">{item.description}</p>
           </div>
         ))}
       </Wrapper>

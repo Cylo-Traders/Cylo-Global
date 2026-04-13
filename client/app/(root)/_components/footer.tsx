@@ -15,10 +15,10 @@ const footerLinks = {
       title: "Quick Links",
       routes: [
         { label: "Home", path: "/" },
-        { label: "Why Choose Us", path: "/#why-choose-us" },
-        { label: "How It Works", path: "/#how-it-works" },
-        { label: "Trust & Security", path: "/#trust" },
+        { label: "About Us", path: "/about" },
         { label: "Marketplace", path: "/market" },
+        { label: "Contact Us", path: "/contact" },
+        { label: "Onboarding", path: "/onboarding" },
       ],
     },
     {
@@ -33,10 +33,10 @@ const footerLinks = {
     {
       title: "Contact",
       routes: [
-        { label: "About Us", path: "/" },
-        { label: "FAQ", path: "/" },
-        { label: "Contact", path: "/" },
-        { label: "Support", path: "/" },
+        { label: "About Cylo", path: "/about" },
+        { label: "FAQ", path: "/contact" },
+        { label: "Contact Us", path: "/contact" },
+        { label: "Support", path: "/contact" },
       ],
     },
   ],
@@ -66,7 +66,7 @@ const footerLinks = {
 
 const Footer = () => {
   return (
-    <footer className="bg-foreground flex w-full flex-col text-white">
+    <footer className="bg-canvas-dark flex w-full flex-col text-white">
       <Wrapper className="flex flex-col pt-20 pb-10 sm:pb-16">
         <div className="grid grid-cols-1 gap-x-8 gap-y-16 lg:grid-cols-2">
           <nav>
