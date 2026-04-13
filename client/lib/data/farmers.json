@@ -1,0 +1,44 @@
+[
+  {
+    "wallet": "0x01a2b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef12345678",
+    "displayName": "John Doe",
+    "username": "johndoe",
+    "avatar": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150",
+    "bio": "Organic farmer from Lagos with 10 years of experience growing vegetables and poultry.",
+    "country": "Nigeria",
+    "city": "Lagos",
+    "latitude": 6.5244,
+    "longitude": 3.3792,
+    "rating": 4.7,
+    "totalOrders": 124,
+    "joinedAt": "2025-06-15"
+  },
+  {
+    "wallet": "0x02b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef123456789a",
+    "displayName": "Jane Smith",
+    "username": "janesmith",
+    "avatar": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150",
+    "bio": "Sustainable farming advocate growing fruits and grains in the highlands of Kenya.",
+    "country": "Kenya",
+    "city": "Nairobi",
+    "latitude": -1.2921,
+    "longitude": 36.8219,
+    "rating": 4.9,
+    "totalOrders": 89,
+    "joinedAt": "2025-04-20"
+  },
+  {
+    "wallet": "0x03c4d5e6f7890abcdef1234567890abcdef1234567890abcdef123456789abc",
+    "displayName": "Amara Okonkwo",
+    "username": "amarafarms",
+    "avatar": "https://images.unsplash.com/photo-1531123897727-8f129e1688ce?w=150",
+    "bio": "Growing the sweetest mangoes in the Volta region for 15 years. Passionate about reducing post-harvest losses.",
+    "country": "Ghana",
+    "city": "Accra",
+    "latitude": 5.6037,
+    "longitude": -0.187,
+    "rating": 4.8,
+    "totalOrders": 210,
+    "joinedAt": "2025-01-10"
+  }
+]
