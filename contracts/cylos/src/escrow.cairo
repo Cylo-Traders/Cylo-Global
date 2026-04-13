@@ -1,68 +1,63 @@
 // ============================================================
 //  escrow.cairo — pure business logic
-//
-//  This module contains no storage declarations. It receives
-//  all state it needs via function parameters (storage refs /
-//  snapshots injected by lib.cairo). This keeps logic fully
-//  unit-testable independent of the contract harness.
 // ============================================================
 
 use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
 use starknet::{ContractAddress, get_block_timestamp, get_contract_address};
 use crate::types::{
-    EscrowError, FEE_DENOMINATOR, FEE_NUMERATOR, NINETY_SIX_HOURS_IN_SECONDS, Order, OrderStatus,
+    EscrowError, FEE_DENOMINATOR, FEE_NUMERATOR, MAX_BPS,
+    MAX_EXPIRY_SECONDS, MIN_EXPIRY_SECONDS, DEFAULT_EXPIRY_SECONDS,
+    Order, OrderStatus, Resolution,
 };
 
-// ── Fee helpers
-// ──────────────────────────────────────────────
+// ── Fee helpers ───────────────────────────────────────────────
 
-/// Returns (fee_amount, net_amount) for a given gross amount.
-/// fee  = amount * 3 / 100  (integer division — rounds down)
-/// net  = amount - fee
+/// fee = amount * 3 / 100 (integer division, rounds down)
+/// Invariant: fee + net == amount always holds.
 pub fn compute_fee(amount: u256) -> (u256, u256) {
     let fee = amount * FEE_NUMERATOR / FEE_DENOMINATOR;
     let net = amount - fee;
     (fee, net)
 }
 
-// ── Token helpers
-// ────────────────────────────────────────────
+/// farmer_split_bps = 6000 → farmer 60%, buyer 40%
+/// Invariant: farmer_amount + buyer_amount == net_amount always holds.
+pub fn compute_split(net_amount: u256, farmer_split_bps: u16) -> (u256, u256) {
+    let farmer_amount = net_amount * farmer_split_bps.into() / MAX_BPS.into();
+    let buyer_amount = net_amount - farmer_amount;
+    (farmer_amount, buyer_amount)
+}
 
-/// Transfer `amount` of `token` from `from` → `to`.
-/// Uses transferFrom (requires prior approval from `from`).
+// ── Token helpers ─────────────────────────────────────────────
+
 pub fn transfer_from(
-    token: ContractAddress, from: ContractAddress, to: ContractAddress, amount: u256,
+    token: ContractAddress,
+    from: ContractAddress,
+    to: ContractAddress,
+    amount: u256,
 ) {
     let erc20 = IERC20Dispatcher { contract_address: token };
     erc20.transfer_from(from, to, amount);
 }
 
-/// Transfer `amount` of `token` from the escrow contract → `to`.
 pub fn transfer_out(token: ContractAddress, to: ContractAddress, amount: u256) {
     let erc20 = IERC20Dispatcher { contract_address: token };
     erc20.transfer(to, amount);
 }
 
-// ── Core operations
-// ──────────────────────────────────────────
+// ── Core operations ───────────────────────────────────────────
 
-/// Validates inputs, pulls funds from buyer, splits fee, and
-/// returns a fully constructed `Order` (net amount stored).
-///
-/// Caller (lib.cairo) is responsible for:
-///   - persisting the returned Order
-///   - incrementing order_id counter
-///   - updating buyer/farmer index lists
+/// Validate inputs, pull funds from buyer, deduct fee, return Order.
+/// expiry_seconds = 0 → use DEFAULT_EXPIRY_SECONDS (96h).
 pub fn build_order(
     buyer: ContractAddress,
     farmer: ContractAddress,
     token: ContractAddress,
     amount: u256,
+    expiry_seconds: u64,
     supported_tokens: @Array<ContractAddress>,
     fee_collector: ContractAddress,
 ) -> Result<(Order, u256, u256), EscrowError> {
-    // ── Guards
-    // ───────────────────────────────────────────────
     if amount == 0 {
         return Result::Err(EscrowError::AmountMustBePositive);
     }
@@ -71,76 +66,137 @@ pub fn build_order(
         return Result::Err(EscrowError::UnsupportedToken);
     }
 
-    // ── Pull full amount from buyer into escrow ──────────────
-    // Buyer must have called token.approve(escrow_address, amount) beforehand.
+    let resolved_expiry = if expiry_seconds == 0 {
+        DEFAULT_EXPIRY_SECONDS
+    } else {
+        expiry_seconds
+    };
+
+    if resolved_expiry < MIN_EXPIRY_SECONDS || resolved_expiry > MAX_EXPIRY_SECONDS {
+        return Result::Err(EscrowError::InvalidExpiry);
+    }
+
     let escrow = get_contract_address();
     transfer_from(token, buyer, escrow, amount);
 
-    // ── Deduct 3% fee immediately
-    // ────────────────────────────
     let (fee_amount, net_amount) = compute_fee(amount);
     transfer_out(token, fee_collector, fee_amount);
 
-    // ── Build the order record (stores net amount only) ──────
+    let zero_address: ContractAddress = 0.try_into().unwrap();
     let order = Order {
         buyer,
         farmer,
         token,
-        amount: net_amount, // only 97% is locked for the farmer
+        amount: net_amount,
         timestamp: get_block_timestamp(),
+        expiry_seconds: resolved_expiry,
         status: OrderStatus::Pending,
+        disputed_by: zero_address,
+        dispute_timestamp: 0,
+        farmer_split_bps: 0,
     };
 
     Result::Ok((order, net_amount, fee_amount))
 }
 
-/// Validates and completes an order, releasing net_amount to farmer.
-/// Returns the mutated Order ready to be re-persisted.
-pub fn complete_order(mut order: Order, caller: ContractAddress) -> Result<Order, EscrowError> {
+/// Buyer confirms receipt — releases net_amount to farmer.
+pub fn complete_order(
+    mut order: Order,
+    caller: ContractAddress,
+) -> Result<Order, EscrowError> {
     if order.buyer != caller {
         return Result::Err(EscrowError::NotBuyer);
     }
     if order.status != OrderStatus::Pending {
         return Result::Err(EscrowError::OrderNotPending);
     }
-
     order.status = OrderStatus::Completed;
     transfer_out(order.token, order.farmer, order.amount);
-
     Result::Ok(order)
 }
 
-/// Validates expiry and refunds net_amount to buyer.
-/// Returns the mutated Order ready to be re-persisted.
+/// Auto-refund expired order — permissionless.
 pub fn expire_order(mut order: Order) -> Result<Order, EscrowError> {
     if order.status != OrderStatus::Pending {
         return Result::Err(EscrowError::OrderNotPending);
     }
-
     let now = get_block_timestamp();
-    if now <= order.timestamp + NINETY_SIX_HOURS_IN_SECONDS {
+    if now <= order.timestamp + order.expiry_seconds {
         return Result::Err(EscrowError::OrderNotExpired);
     }
-
     order.status = OrderStatus::Refunded;
     transfer_out(order.token, order.buyer, order.amount);
-
     Result::Ok(order)
 }
 
-// ── Internal utility
-// ─────────────────────────────────────────
+/// Either party raises a dispute on a Pending, non-expired order.
+pub fn open_dispute(
+    mut order: Order,
+    caller: ContractAddress,
+) -> Result<Order, EscrowError> {
+    if caller != order.buyer && caller != order.farmer {
+        return Result::Err(EscrowError::NotParty);
+    }
+    if order.status != OrderStatus::Pending {
+        return Result::Err(EscrowError::OrderNotPending);
+    }
+    let now = get_block_timestamp();
+    if now > order.timestamp + order.expiry_seconds {
+        return Result::Err(EscrowError::DisputeWindowClosed);
+    }
+    order.status = OrderStatus::DisputeOpen;
+    order.disputed_by = caller;
+    order.dispute_timestamp = now;
+    Result::Ok(order)
+}
 
-fn is_supported_token(token: ContractAddress, supported: @Array<ContractAddress>) -> bool {
+/// Arbitrator rules on a DisputeOpen order.
+pub fn resolve_dispute(
+    mut order: Order,
+    caller: ContractAddress,
+    arbitrator: ContractAddress,
+    resolution: Resolution,
+    farmer_split_bps: u16,
+) -> Result<(Order, u256, u256), EscrowError> {
+    if caller != arbitrator {
+        return Result::Err(EscrowError::NotArbitrator);
+    }
+    if order.status != OrderStatus::DisputeOpen {
+        return Result::Err(EscrowError::OrderNotDisputed);
+    }
+    if resolution == Resolution::Split && farmer_split_bps > MAX_BPS {
+        return Result::Err(EscrowError::InvalidSplitBps);
+    }
+
+    let (farmer_amount, buyer_amount) = match resolution {
+        Resolution::ReleasedToFarmer => (order.amount, 0_u256),
+        Resolution::RefundedToBuyer  => (0_u256, order.amount),
+        Resolution::Split            => compute_split(order.amount, farmer_split_bps),
+    };
+
+    if farmer_amount > 0 {
+        transfer_out(order.token, order.farmer, farmer_amount);
+    }
+    if buyer_amount > 0 {
+        transfer_out(order.token, order.buyer, buyer_amount);
+    }
+
+    order.status = OrderStatus::DisputeResolved;
+    order.farmer_split_bps = farmer_split_bps;
+    Result::Ok((order, farmer_amount, buyer_amount))
+}
+
+// ── Internal ──────────────────────────────────────────────────
+
+fn is_supported_token(
+    token: ContractAddress,
+    supported: @Array<ContractAddress>,
+) -> bool {
     let mut i = 0;
     let len = supported.len();
     loop {
-        if i == len {
-            break false;
-        }
-        if *supported.at(i) == token {
-            break true;
-        }
+        if i == len { break false; }
+        if *supported.at(i) == token { break true; }
         i += 1;
     }
 }

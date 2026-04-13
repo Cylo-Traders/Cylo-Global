@@ -1,65 +1,136 @@
 // ============================================================
-//  tests.cairo — unit + integration tests
+//  tests.cairo — full test suite for escrow v2
 //
-//  Pure logic tests: no deployment, just function calls.
-//  Integration tests: deploy contract via snforge, call via dispatcher.
+//  All dispatchers are rebuilt from ContractAddress at each
+//  call site to satisfy Cairo's ownership model (no Copy on
+//  dispatchers). All assert messages are <= 31 chars.
+//
+//  Sections:
+//    1.  Pure fee logic
+//    2.  Pure split logic
+//    3.  initialize()
+//    4.  Empty index state
+//    5.  create_order() guards
+//    6.  confirm_receipt() guards
+//    7.  refund_expired_order() guards
+//    8.  raise_dispute() guards
+//    9.  rule_dispute() guards
+//   10.  update_arbitrator() guards
+//   11.  Full flow: create → confirm
+//   12.  Full flow: create → expire → refund
+//   13.  Full flow: dispute → farmer wins
+//   14.  Full flow: dispute → buyer wins
+//   15.  Full flow: dispute → split ruling
+//   16.  Custom expiry
+//   17.  Arbitrator rotation
 // ============================================================
-//0x01ebdc181531defe6b306f8c8f3a65b24f0c4572c317279c48ed112e310fd628
-mod tests {
-    // use starknet::contract_address_const;
 
-    use cylos::escrow::compute_fee;
+#[cfg(test)]
+mod tests {
+    use cylos::escrow::{compute_fee, compute_split};
     use cylos::interface::{IEscrowDispatcher, IEscrowDispatcherTrait};
-    use cylos::types::EscrowError;
+    use cylos::mock_erc20::{IMockERC20Dispatcher, IMockERC20DispatcherTrait};
+    use cylos::types::{EscrowError, Resolution};
     use snforge_std::{
-        ContractClassTrait, DeclareResultTrait, declare, start_cheat_caller_address,
-        stop_cheat_caller_address,
-        // start_cheat_block_timestamp_global, stop_cheat_block_timestamp_global,
+        ContractClassTrait, DeclareResultTrait, declare,
+        start_cheat_caller_address, stop_cheat_caller_address,
+        start_cheat_block_timestamp_global, stop_cheat_block_timestamp_global,
     };
     use starknet::{ContractAddress, SyscallResultTrait};
 
-    // ── Helpers
-    // ───────────────────────────────────────────────
+    // ── Address helpers ───────────────────────────────────────
+    fn admin() -> ContractAddress { 1.try_into().unwrap() }
+    fn fee_collector() -> ContractAddress { 2.try_into().unwrap() }
+    fn buyer() -> ContractAddress { 3.try_into().unwrap() }
+    fn farmer() -> ContractAddress { 4.try_into().unwrap() }
+    fn arbitrator() -> ContractAddress { 5.try_into().unwrap() }
+    fn token_b_addr() -> ContractAddress { 6.try_into().unwrap() }
+    fn stranger() -> ContractAddress { 7.try_into().unwrap() }
+    fn new_arbitrator() -> ContractAddress { 8.try_into().unwrap() }
 
-    //fn admin() -> ContractAddress { contract_address_const::<'admin'>() }
-    fn admin() -> ContractAddress {
-        1.try_into().unwrap()
-    }
-    fn fee_collector() -> ContractAddress {
-        2.try_into().unwrap()
-    }
-    fn buyer() -> ContractAddress {
-        3.try_into().unwrap()
-    }
-    fn farmer() -> ContractAddress {
-        4.try_into().unwrap()
-    }
-    fn token_a() -> ContractAddress {
-        5.try_into().unwrap()
-    }
-    fn token_b() -> ContractAddress {
-        6.try_into().unwrap()
-    }
-    fn stranger() -> ContractAddress {
-        7.try_into().unwrap()
+    // ── Dispatcher constructors ───────────────────────────────
+    // ContractAddress is Copy — store addresses, rebuild dispatchers
+    // at each call site to satisfy Cairo's ownership model.
+
+    fn escrow_at(a: ContractAddress) -> IEscrowDispatcher {
+        IEscrowDispatcher { contract_address: a }
     }
 
-    /// Deploy the escrow contract and return a dispatcher
-    fn deploy_escrow() -> IEscrowDispatcher {
-        let contract = declare("EscrowContract").unwrap_syscall().contract_class();
-        let (address, _) = contract.deploy(@array![]).unwrap_syscall();
-        IEscrowDispatcher { contract_address: address }
+    fn token_at(a: ContractAddress) -> IMockERC20Dispatcher {
+        IMockERC20Dispatcher { contract_address: a }
     }
 
-    /// Deploy and immediately initialize with two tokens
-    fn deploy_and_init() -> IEscrowDispatcher {
-        let escrow = deploy_escrow();
-        escrow.initialize(admin(), array![token_a(), token_b()], fee_collector()).unwrap();
-        escrow
+    // ── Deploy helpers ────────────────────────────────────────
+
+    fn deploy_mock_erc20() -> ContractAddress {
+        let c = declare("MockERC20").unwrap_syscall().contract_class();
+        let (addr, _) = c.deploy(@array![]).unwrap_syscall();
+        addr
+    }
+
+    fn deploy_escrow() -> ContractAddress {
+        let c = declare("EscrowContract").unwrap_syscall().contract_class();
+        let (addr, _) = c.deploy(@array![]).unwrap_syscall();
+        addr
+    }
+
+    /// Deploy + initialize. Returns (escrow_addr, token_addr).
+    fn setup() -> (ContractAddress, ContractAddress) {
+        let escrow_addr = deploy_escrow();
+        let token_addr = deploy_mock_erc20();
+        escrow_at(escrow_addr)
+            .initialize(
+                admin(), arbitrator(),
+                array![token_addr, token_b_addr()],
+                fee_collector(),
+            )
+            .unwrap();
+        (escrow_addr, token_addr)
+    }
+
+    /// Mint → approve → create_order with default expiry (0).
+    fn create_funded_order(
+        escrow_addr: ContractAddress,
+        token_addr: ContractAddress,
+        amount: u256,
+    ) -> u64 {
+        token_at(token_addr).mint(buyer(), amount);
+
+        start_cheat_caller_address(token_addr, buyer());
+        token_at(token_addr).approve(escrow_addr, amount);
+        stop_cheat_caller_address(token_addr);
+
+        start_cheat_caller_address(escrow_addr, buyer());
+        let id = escrow_at(escrow_addr)
+            .create_order(buyer(), farmer(), token_addr, amount, 0)
+            .unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        id
+    }
+
+    /// Same but with explicit expiry_seconds.
+    fn create_funded_order_expiry(
+        escrow_addr: ContractAddress,
+        token_addr: ContractAddress,
+        amount: u256,
+        expiry: u64,
+    ) -> u64 {
+        token_at(token_addr).mint(buyer(), amount);
+
+        start_cheat_caller_address(token_addr, buyer());
+        token_at(token_addr).approve(escrow_addr, amount);
+        stop_cheat_caller_address(token_addr);
+
+        start_cheat_caller_address(escrow_addr, buyer());
+        let id = escrow_at(escrow_addr)
+            .create_order(buyer(), farmer(), token_addr, amount, expiry)
+            .unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        id
     }
 
     // ================================================================
-    //  SECTION 1 — Pure fee logic (no deployment)
+    //  SECTION 1 — Pure fee logic
     // ================================================================
 
     #[test]
@@ -71,227 +142,776 @@ mod tests {
 
     #[test]
     fn test_fee_rounds_down() {
-        // 3% of 101 = 3.03 → floors to 3
         let (fee, net) = compute_fee(101_u256);
         assert(fee == 3_u256, 'fee floors to 3');
         assert(net == 98_u256, 'net should be 98');
     }
 
     #[test]
-    fn test_fee_zero_amount() {
+    fn test_fee_zero() {
         let (fee, net) = compute_fee(0_u256);
         assert(fee == 0_u256, 'fee of 0 is 0');
         assert(net == 0_u256, 'net of 0 is 0');
     }
 
     #[test]
-    fn test_fee_large_amount() {
-        // 1_000_000 units (e.g. USDC with 6 decimals = $1)
+    fn test_fee_large() {
         let (fee, net) = compute_fee(1_000_000_u256);
         assert(fee == 30_000_u256, 'fee should be 30000');
         assert(net == 970_000_u256, 'net should be 970000');
     }
 
     #[test]
-    fn test_fee_plus_net_equals_amount() {
-        // Invariant: fee + net always == original amount
-        let amounts: Array<u256> = array![1_u256, 33_u256, 999_u256, 10_000_u256, 99_999_u256];
+    fn test_fee_invariant() {
+        let amounts: Array<u256> = array![
+            1_u256, 33_u256, 999_u256, 10_000_u256, 99_999_u256,
+        ];
         let mut i = 0;
         while i < amounts.len() {
-            let amount = *amounts.at(i);
-            let (fee, net) = compute_fee(amount);
-            assert(fee + net == amount, 'fee+net must equal amount');
+            let a = *amounts.at(i);
+            let (fee, net) = compute_fee(a);
+            assert(fee + net == a, 'fee+net must equal amount');
             i += 1;
-        };
+        }
     }
 
     // ================================================================
-    //  SECTION 2 — initialize()
+    //  SECTION 2 — Pure split logic
     // ================================================================
 
     #[test]
-    fn test_initialize_succeeds() {
-        let escrow = deploy_escrow();
-        let result = escrow.initialize(admin(), array![token_a(), token_b()], fee_collector());
-        assert(result.is_ok(), 'init should succeed');
+    fn test_split_50_50() {
+        let (f, b) = compute_split(1000_u256, 5000);
+        assert(f == 500_u256, 'farmer gets 500');
+        assert(b == 500_u256, 'buyer gets 500');
     }
 
     #[test]
-    fn test_initialize_stores_fee_collector() {
-        let escrow = deploy_and_init();
-        assert(escrow.get_fee_collector() == fee_collector(), 'wrong fee collector');
+    fn test_split_60_40() {
+        let (f, b) = compute_split(1000_u256, 6000);
+        assert(f == 600_u256, 'farmer gets 600');
+        assert(b == 400_u256, 'buyer gets 400');
     }
 
     #[test]
-    fn test_initialize_stores_supported_tokens() {
-        let escrow = deploy_and_init();
-        let tokens = escrow.get_supported_tokens();
+    fn test_split_all_to_farmer() {
+        let (f, b) = compute_split(1000_u256, 10000);
+        assert(f == 1000_u256, 'farmer gets all');
+        assert(b == 0_u256, 'buyer gets nothing');
+    }
+
+    #[test]
+    fn test_split_all_to_buyer() {
+        let (f, b) = compute_split(1000_u256, 0);
+        assert(f == 0_u256, 'farmer gets nothing');
+        assert(b == 1000_u256, 'buyer gets all');
+    }
+
+    #[test]
+    fn test_split_invariant() {
+        let cases: Array<(u256, u16)> = array![
+            (1000_u256, 3333_u16),
+            (970_u256, 6000_u16),
+            (500_u256, 1_u16),
+            (99999_u256, 9999_u16),
+        ];
+        let mut i = 0;
+        while i < cases.len() {
+            let (net, bps) = *cases.at(i);
+            let (f, b) = compute_split(net, bps);
+            assert(f + b == net, 'split must sum to net');
+            i += 1;
+        }
+    }
+
+    // ================================================================
+    //  SECTION 3 — initialize()
+    // ================================================================
+
+    #[test]
+    fn test_initialize_stores_all_values() {
+        let (escrow_addr, token_addr) = setup();
+        assert(escrow_at(escrow_addr).get_fee_collector() == fee_collector(), 'wrong fee_collector');
+        assert(escrow_at(escrow_addr).get_arbitrator() == arbitrator(), 'wrong arbitrator');
+        assert(escrow_at(escrow_addr).get_order_count() == 0, 'count should be 0');
+        let tokens = escrow_at(escrow_addr).get_supported_tokens();
         assert(tokens.len() == 2, 'should have 2 tokens');
-        assert(*tokens.at(0) == token_a(), 'first token mismatch');
-        assert(*tokens.at(1) == token_b(), 'second token mismatch');
-    }
-
-    #[test]
-    fn test_initialize_order_count_starts_at_zero() {
-        let escrow = deploy_and_init();
-        assert(escrow.get_order_count() == 0, 'order count should start at 0');
+        assert(*tokens.at(0) == token_addr, 'first token wrong');
+        assert(*tokens.at(1) == token_b_addr(), 'second token wrong');
     }
 
     #[test]
     fn test_initialize_twice_fails() {
-        let escrow = deploy_and_init();
-        let result = escrow.initialize(admin(), array![token_a(), token_b()], fee_collector());
-        assert(result == Result::Err(EscrowError::AlreadyInitialized), 'double init must fail');
+        let (escrow_addr, token_addr) = setup();
+        let result = escrow_at(escrow_addr).initialize(
+            admin(), arbitrator(),
+            array![token_addr, token_b_addr()],
+            fee_collector(),
+        );
+        assert(
+            result == Result::Err(EscrowError::AlreadyInitialized),
+            'double init must fail',
+        );
     }
 
     #[test]
-    fn test_initialize_requires_two_tokens() {
-        let escrow = deploy_escrow();
-        let result = escrow.initialize(admin(), array![token_a()], fee_collector());
-        assert(result == Result::Err(EscrowError::MustSupportTwoTokens), 'need 2+ tokens');
+    fn test_initialize_one_token_fails() {
+        let escrow_addr = deploy_escrow();
+        let token_addr = deploy_mock_erc20();
+        let result = escrow_at(escrow_addr).initialize(
+            admin(), arbitrator(), array![token_addr], fee_collector(),
+        );
+        assert(
+            result == Result::Err(EscrowError::MustSupportTwoTokens),
+            'need 2+ tokens',
+        );
     }
 
     #[test]
-    fn test_initialize_empty_tokens_fails() {
-        let escrow = deploy_escrow();
-        let result = escrow.initialize(admin(), array![], fee_collector());
-        assert(result == Result::Err(EscrowError::MustSupportTwoTokens), 'empty tokens must fail');
+    fn test_initialize_no_tokens_fails() {
+        let escrow_addr = deploy_escrow();
+        let result = escrow_at(escrow_addr).initialize(
+            admin(), arbitrator(), array![], fee_collector(),
+        );
+        assert(
+            result == Result::Err(EscrowError::MustSupportTwoTokens),
+            'empty tokens must fail',
+        );
     }
 
     // ================================================================
-    //  SECTION 3 — get_order_details() on nonexistent order
+    //  SECTION 4 — Empty index state
     // ================================================================
 
     #[test]
-    fn test_get_order_details_nonexistent() {
-        let escrow = deploy_and_init();
-        let result = escrow.get_order_details(99);
-        assert(result.is_err(), 'should be an error');
-        assert(result.unwrap_err() == EscrowError::OrderDoesNotExist, 'order 99 should not exist');
+    fn test_buyer_index_empty() {
+        let (escrow_addr, _) = setup();
+        assert(escrow_at(escrow_addr).get_orders_by_buyer(buyer()).len() == 0, 'no orders');
     }
 
     #[test]
-    fn test_get_order_details_zero_id_fails() {
-        let escrow = deploy_and_init();
-        let result = escrow.get_order_details(0);
-        assert(result.is_err(), 'should be an error');
-        assert(result.unwrap_err() == EscrowError::OrderDoesNotExist, 'order 0 is invalid');
-    }
-
-    // ================================================================
-    //  SECTION 4 — get_orders_by_buyer / get_orders_by_farmer
-    //  (empty state — no ERC20 needed)
-    // ================================================================
-
-    #[test]
-    fn test_buyer_orders_empty_initially() {
-        let escrow = deploy_and_init();
-        let orders = escrow.get_orders_by_buyer(buyer());
-        assert(orders.len() == 0, 'buyer should have no orders');
+    fn test_farmer_index_empty() {
+        let (escrow_addr, _) = setup();
+        assert(escrow_at(escrow_addr).get_orders_by_farmer(farmer()).len() == 0, 'no orders');
     }
 
     #[test]
-    fn test_farmer_orders_empty_initially() {
-        let escrow = deploy_and_init();
-        let orders = escrow.get_orders_by_farmer(farmer());
-        assert(orders.len() == 0, 'farmer should have no orders');
+    fn test_order_details_nonexistent() {
+        let (escrow_addr, _) = setup();
+        let r = escrow_at(escrow_addr).get_order_details(99);
+        assert(r.is_err(), 'should be error');
+        assert(r.unwrap_err() == EscrowError::OrderDoesNotExist, 'wrong error');
+    }
+
+    #[test]
+    fn test_order_zero_id_invalid() {
+        let (escrow_addr, _) = setup();
+        let r = escrow_at(escrow_addr).get_order_details(0);
+        assert(r.is_err(), 'should be error');
+        assert(r.unwrap_err() == EscrowError::OrderDoesNotExist, 'order 0 invalid');
     }
 
     // ================================================================
-    //  SECTION 5 — create_order() guard checks
-    //  These revert before any ERC20 transfer, so no mock needed.
+    //  SECTION 5 — create_order() guards
     // ================================================================
 
     #[test]
     #[should_panic(expected: ('Caller must be buyer',))]
-    fn test_create_order_caller_must_be_buyer() {
-        let escrow = deploy_and_init();
-        // stranger calls create_order but passes buyer() as the buyer arg
-        start_cheat_caller_address(escrow.contract_address, stranger());
-        escrow.create_order(buyer(), farmer(), token_a(), 1000_u256).unwrap();
-        stop_cheat_caller_address(escrow.contract_address);
+    fn test_create_wrong_caller() {
+        let (escrow_addr, token_addr) = setup();
+        start_cheat_caller_address(escrow_addr, stranger());
+        escrow_at(escrow_addr)
+            .create_order(buyer(), farmer(), token_addr, 1000_u256, 0)
+            .unwrap();
+        stop_cheat_caller_address(escrow_addr);
     }
 
     #[test]
-    fn test_create_order_unsupported_token_fails() {
-        let escrow = deploy_and_init();
-        let unknown_token: ContractAddress = 99.try_into().unwrap();
-
-        start_cheat_caller_address(escrow.contract_address, buyer());
-        let result = escrow.create_order(buyer(), farmer(), unknown_token, 1000_u256);
-        stop_cheat_caller_address(escrow.contract_address);
-
-        assert(result == Result::Err(EscrowError::UnsupportedToken), 'unsupported token must fail');
+    fn test_create_unsupported_token() {
+        let (escrow_addr, _) = setup();
+        let bad: ContractAddress = 99.try_into().unwrap();
+        start_cheat_caller_address(escrow_addr, buyer());
+        let r = escrow_at(escrow_addr).create_order(buyer(), farmer(), bad, 1000_u256, 0);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::UnsupportedToken), 'unsupported token');
     }
 
     #[test]
-    fn test_create_order_zero_amount_fails() {
-        let escrow = deploy_and_init();
-
-        start_cheat_caller_address(escrow.contract_address, buyer());
-        let result = escrow.create_order(buyer(), farmer(), token_a(), 0_u256);
-        stop_cheat_caller_address(escrow.contract_address);
-
-        assert(result == Result::Err(EscrowError::AmountMustBePositive), 'zero amount must fail');
+    fn test_create_zero_amount() {
+        let (escrow_addr, token_addr) = setup();
+        start_cheat_caller_address(escrow_addr, buyer());
+        let r = escrow_at(escrow_addr)
+            .create_order(buyer(), farmer(), token_addr, 0_u256, 0);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::AmountMustBePositive), 'zero amount fails');
     }
 
     #[test]
-    fn test_create_order_uninitialized_contract_fails() {
-        let escrow = deploy_escrow(); // NOT initialized
+    fn test_create_uninitialized() {
+        let escrow_addr = deploy_escrow();
+        let token_addr = deploy_mock_erc20();
+        start_cheat_caller_address(escrow_addr, buyer());
+        let r = escrow_at(escrow_addr)
+            .create_order(buyer(), farmer(), token_addr, 1000_u256, 0);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::ContractNotInitialized), 'needs init');
+    }
 
-        start_cheat_caller_address(escrow.contract_address, buyer());
-        let result = escrow.create_order(buyer(), farmer(), token_a(), 1000_u256);
-        stop_cheat_caller_address(escrow.contract_address);
+    #[test]
+    fn test_create_expiry_below_min_fails() {
+        let (escrow_addr, token_addr) = setup();
+        token_at(token_addr).mint(buyer(), 1000_u256);
 
-        assert(result == Result::Err(EscrowError::ContractNotInitialized), 'must be initialized');
+        start_cheat_caller_address(token_addr, buyer());
+        token_at(token_addr).approve(escrow_addr, 1000_u256);
+        stop_cheat_caller_address(token_addr);
+
+        // 1 second — below 24h minimum
+        start_cheat_caller_address(escrow_addr, buyer());
+        let r = escrow_at(escrow_addr)
+            .create_order(buyer(), farmer(), token_addr, 1000_u256, 1);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::InvalidExpiry), 'expiry too short');
+    }
+
+    #[test]
+    fn test_create_expiry_above_max_fails() {
+        let (escrow_addr, token_addr) = setup();
+        token_at(token_addr).mint(buyer(), 1000_u256);
+
+        start_cheat_caller_address(token_addr, buyer());
+        token_at(token_addr).approve(escrow_addr, 1000_u256);
+        stop_cheat_caller_address(token_addr);
+
+        // 31 days — above 30-day maximum
+        start_cheat_caller_address(escrow_addr, buyer());
+        let r = escrow_at(escrow_addr)
+            .create_order(buyer(), farmer(), token_addr, 1000_u256, 31 * 24 * 60 * 60);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::InvalidExpiry), 'expiry too long');
     }
 
     // ================================================================
-    //  SECTION 6 — confirm_receipt() guard checks
+    //  SECTION 6 — confirm_receipt() guards
     // ================================================================
 
     #[test]
-    fn test_confirm_receipt_nonexistent_order_fails() {
-        let escrow = deploy_and_init();
-
-        start_cheat_caller_address(escrow.contract_address, buyer());
-        let result = escrow.confirm_receipt(buyer(), 999);
-        stop_cheat_caller_address(escrow.contract_address);
-
-        assert(result == Result::Err(EscrowError::OrderDoesNotExist), 'order must exist');
+    fn test_confirm_nonexistent() {
+        let (escrow_addr, _) = setup();
+        start_cheat_caller_address(escrow_addr, buyer());
+        let r = escrow_at(escrow_addr).confirm_receipt(buyer(), 999);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::OrderDoesNotExist), 'order must exist');
     }
 
     // ================================================================
-    //  SECTION 7 — refund_expired_order() guard checks
+    //  SECTION 7 — refund_expired_order() guards
     // ================================================================
 
     #[test]
-    fn test_refund_nonexistent_order_fails() {
-        let escrow = deploy_and_init();
-        let result = escrow.refund_expired_order(999);
-        assert(result == Result::Err(EscrowError::OrderDoesNotExist), 'order must exist');
+    fn test_refund_nonexistent() {
+        let (escrow_addr, _) = setup();
+        let r = escrow_at(escrow_addr).refund_expired_order(999);
+        assert(r == Result::Err(EscrowError::OrderDoesNotExist), 'order must exist');
     }
+
     // ================================================================
-//  SECTION 8 — Full flow tests
-//  Requires a mock ERC20. Uncomment once mock is deployed alongside.
-//
-//  Pattern:
-//    1. Deploy mock ERC20, mint `amount` to buyer
-//    2. Buyer approves escrow for `amount`
-//    3. create_order → assert fee_collector got 3%, order stores 97%
-//    4a. confirm_receipt → assert farmer got 97%
-//    4b. OR advance time 96h → refund_expired_order → buyer got 97% back
-// ================================================================
+    //  SECTION 8 — raise_dispute() guards
+    // ================================================================
 
-    // #[test]
-// fn test_create_order_splits_fee_correctly() { ... }
+    #[test]
+    fn test_dispute_nonexistent() {
+        let (escrow_addr, _) = setup();
+        start_cheat_caller_address(escrow_addr, buyer());
+        let r = escrow_at(escrow_addr).raise_dispute(999);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::OrderDoesNotExist), 'order must exist');
+    }
 
-    // #[test]
-// fn test_confirm_receipt_releases_net_to_farmer() { ... }
+    #[test]
+    fn test_dispute_stranger_fails() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, stranger());
+        let r = escrow_at(escrow_addr).raise_dispute(id);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::NotParty), 'stranger cannot dispute');
+    }
 
-    // #[test]
-// fn test_refund_after_96h_returns_net_to_buyer() { ... }
+    #[test]
+    fn test_dispute_buyer_can_raise() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        let r = escrow_at(escrow_addr).raise_dispute(id);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r.is_ok(), 'buyer can dispute');
+    }
 
-    // #[test]
-// fn test_refund_before_96h_fails() { ... }
+    #[test]
+    fn test_dispute_farmer_can_raise() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, farmer());
+        let r = escrow_at(escrow_addr).raise_dispute(id);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r.is_ok(), 'farmer can dispute');
+    }
+
+    #[test]
+    fn test_dispute_twice_fails() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).raise_dispute(id).unwrap();
+        let r = escrow_at(escrow_addr).raise_dispute(id);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::OrderNotPending), 'cannot dispute twice');
+    }
+
+    #[test]
+    fn test_dispute_after_expiry_fails() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_block_timestamp_global(97 * 60 * 60);
+        start_cheat_caller_address(escrow_addr, buyer());
+        let r = escrow_at(escrow_addr).raise_dispute(id);
+        stop_cheat_caller_address(escrow_addr);
+        stop_cheat_block_timestamp_global();
+        assert(r == Result::Err(EscrowError::DisputeWindowClosed), 'window closed');
+    }
+
+    #[test]
+    fn test_confirm_on_disputed_order_fails() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).raise_dispute(id).unwrap();
+        let r = escrow_at(escrow_addr).confirm_receipt(buyer(), id);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::OrderNotPending), 'no confirm on dispute');
+    }
+
+    #[test]
+    fn test_refund_on_disputed_order_fails() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).raise_dispute(id).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        start_cheat_block_timestamp_global(97 * 60 * 60);
+        let r = escrow_at(escrow_addr).refund_expired_order(id);
+        stop_cheat_block_timestamp_global();
+        assert(r == Result::Err(EscrowError::OrderNotPending), 'no refund on dispute');
+    }
+
+    // ================================================================
+    //  SECTION 9 — rule_dispute() guards
+    // ================================================================
+
+    #[test]
+    fn test_rule_non_arbitrator_fails() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).raise_dispute(id).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        start_cheat_caller_address(escrow_addr, stranger());
+        let r = escrow_at(escrow_addr).rule_dispute(id, Resolution::ReleasedToFarmer, 0);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::NotArbitrator), 'only arbitrator rules');
+    }
+
+    #[test]
+    fn test_rule_pending_order_fails() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, arbitrator());
+        let r = escrow_at(escrow_addr).rule_dispute(id, Resolution::ReleasedToFarmer, 0);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::OrderNotDisputed), 'not disputed');
+    }
+
+    #[test]
+    fn test_rule_invalid_bps_fails() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).raise_dispute(id).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        start_cheat_caller_address(escrow_addr, arbitrator());
+        let r = escrow_at(escrow_addr).rule_dispute(id, Resolution::Split, 10001);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::InvalidSplitBps), 'invalid bps');
+    }
+
+    #[test]
+    fn test_rule_twice_fails() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).raise_dispute(id).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        start_cheat_caller_address(escrow_addr, arbitrator());
+        escrow_at(escrow_addr).rule_dispute(id, Resolution::ReleasedToFarmer, 0).unwrap();
+        let r = escrow_at(escrow_addr).rule_dispute(id, Resolution::RefundedToBuyer, 0);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::OrderNotDisputed), 'cannot rule twice');
+    }
+
+    // ================================================================
+    //  SECTION 10 — update_arbitrator() guards
+    // ================================================================
+
+    #[test]
+    fn test_update_arbitrator_by_admin() {
+        let (escrow_addr, _) = setup();
+        start_cheat_caller_address(escrow_addr, admin());
+        escrow_at(escrow_addr).update_arbitrator(new_arbitrator()).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        assert(escrow_at(escrow_addr).get_arbitrator() == new_arbitrator(), 'arb updated');
+    }
+
+    #[test]
+    #[should_panic(expected: ('Caller must be admin',))]
+    fn test_update_arbitrator_stranger_fails() {
+        let (escrow_addr, _) = setup();
+        start_cheat_caller_address(escrow_addr, stranger());
+        escrow_at(escrow_addr).update_arbitrator(new_arbitrator()).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+    }
+
+    // ================================================================
+    //  SECTION 11 — Full flow: create → confirm
+    // ================================================================
+
+    #[test]
+    fn test_fee_collector_gets_3_pct() {
+        let (escrow_addr, token_addr) = setup();
+        create_funded_order(escrow_addr, token_addr, 1000_u256);
+        assert(token_at(token_addr).balance_of(fee_collector()) == 30_u256, 'fee = 30');
+    }
+
+    #[test]
+    fn test_escrow_holds_net() {
+        let (escrow_addr, token_addr) = setup();
+        create_funded_order(escrow_addr, token_addr, 1000_u256);
+        assert(token_at(token_addr).balance_of(escrow_addr) == 970_u256, 'escrow = 970');
+    }
+
+    #[test]
+    fn test_buyer_balance_zero_after_create() {
+        let (escrow_addr, token_addr) = setup();
+        create_funded_order(escrow_addr, token_addr, 1000_u256);
+        assert(token_at(token_addr).balance_of(buyer()) == 0_u256, 'buyer = 0');
+    }
+
+    #[test]
+    fn test_order_stores_net() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        let order = escrow_at(escrow_addr).get_order_details(id).unwrap();
+        assert(order.amount == 970_u256, 'order.amount = 970');
+    }
+
+    #[test]
+    fn test_order_count_increments() {
+        let (escrow_addr, token_addr) = setup();
+        create_funded_order(escrow_addr, token_addr, 1000_u256);
+        assert(escrow_at(escrow_addr).get_order_count() == 1, 'count = 1');
+        create_funded_order(escrow_addr, token_addr, 500_u256);
+        assert(escrow_at(escrow_addr).get_order_count() == 2, 'count = 2');
+    }
+
+    #[test]
+    fn test_buyer_index_updated() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        let orders = escrow_at(escrow_addr).get_orders_by_buyer(buyer());
+        assert(orders.len() == 1, 'buyer has 1 order');
+        assert(*orders.at(0) == id, 'id matches');
+    }
+
+    #[test]
+    fn test_farmer_index_updated() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        let orders = escrow_at(escrow_addr).get_orders_by_farmer(farmer());
+        assert(orders.len() == 1, 'farmer has 1 order');
+        assert(*orders.at(0) == id, 'id matches');
+    }
+
+    #[test]
+    fn test_confirm_releases_to_farmer() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).confirm_receipt(buyer(), id).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        assert(token_at(token_addr).balance_of(farmer()) == 970_u256, 'farmer = 970');
+        assert(token_at(token_addr).balance_of(escrow_addr) == 0_u256, 'escrow = 0');
+    }
+
+    #[test]
+    fn test_confirm_wrong_buyer_fails() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, stranger());
+        let r = escrow_at(escrow_addr).confirm_receipt(stranger(), id);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::NotBuyer), 'wrong buyer fails');
+    }
+
+    #[test]
+    fn test_confirm_twice_fails() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).confirm_receipt(buyer(), id).unwrap();
+        let r = escrow_at(escrow_addr).confirm_receipt(buyer(), id);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::OrderNotPending), 'double confirm fails');
+    }
+
+    #[test]
+    fn test_fee_unchanged_after_confirm() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).confirm_receipt(buyer(), id).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        assert(token_at(token_addr).balance_of(fee_collector()) == 30_u256, 'fee stays 30');
+    }
+
+    // ================================================================
+    //  SECTION 12 — Full flow: create → expire → refund
+    // ================================================================
+
+    #[test]
+    fn test_refund_before_expiry_fails() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_block_timestamp_global(95 * 60 * 60);
+        let r = escrow_at(escrow_addr).refund_expired_order(id);
+        stop_cheat_block_timestamp_global();
+        assert(r == Result::Err(EscrowError::OrderNotExpired), 'too early');
+    }
+
+    #[test]
+    fn test_refund_after_expiry_succeeds() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_block_timestamp_global(97 * 60 * 60);
+        escrow_at(escrow_addr).refund_expired_order(id).unwrap();
+        stop_cheat_block_timestamp_global();
+        assert(token_at(token_addr).balance_of(buyer()) == 970_u256, 'buyer = 970');
+        assert(token_at(token_addr).balance_of(escrow_addr) == 0_u256, 'escrow = 0');
+    }
+
+    #[test]
+    fn test_refund_confirmed_order_fails() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).confirm_receipt(buyer(), id).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        start_cheat_block_timestamp_global(97 * 60 * 60);
+        let r = escrow_at(escrow_addr).refund_expired_order(id);
+        stop_cheat_block_timestamp_global();
+        assert(r == Result::Err(EscrowError::OrderNotPending), 'confirmed not refundable');
+    }
+
+    #[test]
+    fn test_fee_non_refundable() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_block_timestamp_global(97 * 60 * 60);
+        escrow_at(escrow_addr).refund_expired_order(id).unwrap();
+        stop_cheat_block_timestamp_global();
+        assert(token_at(token_addr).balance_of(fee_collector()) == 30_u256, 'fee non-refundable');
+    }
+
+    #[test]
+    fn test_batch_refund() {
+        let (escrow_addr, token_addr) = setup();
+        let id1 = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        let id2 = create_funded_order(escrow_addr, token_addr, 500_u256);
+        start_cheat_block_timestamp_global(97 * 60 * 60);
+        escrow_at(escrow_addr).refund_expired_orders(array![id1, id2]).unwrap();
+        stop_cheat_block_timestamp_global();
+        // 970 + 485 = 1455
+        assert(token_at(token_addr).balance_of(buyer()) == 1455_u256, 'buyer gets both');
+        assert(token_at(token_addr).balance_of(escrow_addr) == 0_u256, 'escrow = 0');
+    }
+
+    #[test]
+    fn test_batch_refund_not_expired_fails() {
+        let (escrow_addr, token_addr) = setup();
+        let id1 = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        let id2 = create_funded_order(escrow_addr, token_addr, 500_u256);
+        start_cheat_block_timestamp_global(95 * 60 * 60);
+        let r = escrow_at(escrow_addr).refund_expired_orders(array![id1, id2]);
+        stop_cheat_block_timestamp_global();
+        assert(r == Result::Err(EscrowError::OrderNotExpired), 'batch all-or-nothing');
+    }
+
+    // ================================================================
+    //  SECTION 13 — Full flow: dispute → farmer wins
+    // ================================================================
+
+    #[test]
+    fn test_dispute_farmer_wins() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).raise_dispute(id).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        start_cheat_caller_address(escrow_addr, arbitrator());
+        escrow_at(escrow_addr).rule_dispute(id, Resolution::ReleasedToFarmer, 0).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        assert(token_at(token_addr).balance_of(farmer()) == 970_u256, 'farmer = 970');
+        assert(token_at(token_addr).balance_of(buyer()) == 0_u256, 'buyer = 0');
+        assert(token_at(token_addr).balance_of(escrow_addr) == 0_u256, 'escrow = 0');
+    }
+
+    // ================================================================
+    //  SECTION 14 — Full flow: dispute → buyer wins
+    // ================================================================
+
+    #[test]
+    fn test_dispute_buyer_wins() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, farmer());
+        escrow_at(escrow_addr).raise_dispute(id).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        start_cheat_caller_address(escrow_addr, arbitrator());
+        escrow_at(escrow_addr).rule_dispute(id, Resolution::RefundedToBuyer, 0).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        assert(token_at(token_addr).balance_of(buyer()) == 970_u256, 'buyer = 970');
+        assert(token_at(token_addr).balance_of(farmer()) == 0_u256, 'farmer = 0');
+        assert(token_at(token_addr).balance_of(escrow_addr) == 0_u256, 'escrow = 0');
+    }
+
+    // ================================================================
+    //  SECTION 15 — Full flow: dispute → split ruling
+    // ================================================================
+
+    #[test]
+    fn test_dispute_split_60_40() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).raise_dispute(id).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        start_cheat_caller_address(escrow_addr, arbitrator());
+        escrow_at(escrow_addr).rule_dispute(id, Resolution::Split, 6000).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        let (ef, eb) = compute_split(970_u256, 6000);
+        assert(token_at(token_addr).balance_of(farmer()) == ef, 'farmer split wrong');
+        assert(token_at(token_addr).balance_of(buyer()) == eb, 'buyer split wrong');
+        assert(token_at(token_addr).balance_of(escrow_addr) == 0_u256, 'escrow = 0');
+    }
+
+    #[test]
+    fn test_dispute_split_sums_to_net() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).raise_dispute(id).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        start_cheat_caller_address(escrow_addr, arbitrator());
+        escrow_at(escrow_addr).rule_dispute(id, Resolution::Split, 3333).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        let total = token_at(token_addr).balance_of(farmer())
+            + token_at(token_addr).balance_of(buyer());
+        assert(total == 970_u256, 'split sums to net');
+    }
+
+    #[test]
+    fn test_fee_unchanged_after_dispute_ruling() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).raise_dispute(id).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        start_cheat_caller_address(escrow_addr, arbitrator());
+        escrow_at(escrow_addr).rule_dispute(id, Resolution::RefundedToBuyer, 0).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+        assert(token_at(token_addr).balance_of(fee_collector()) == 30_u256, 'fee stays 30');
+    }
+
+    // ================================================================
+    //  SECTION 16 — Custom expiry
+    // ================================================================
+
+    #[test]
+    fn test_custom_expiry_48h_not_expired_at_47h() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order_expiry(escrow_addr, token_addr, 1000_u256, 48 * 60 * 60);
+        start_cheat_block_timestamp_global(47 * 60 * 60);
+        let r = escrow_at(escrow_addr).refund_expired_order(id);
+        stop_cheat_block_timestamp_global();
+        assert(r == Result::Err(EscrowError::OrderNotExpired), 'not expired at 47h');
+    }
+
+    #[test]
+    fn test_custom_expiry_48h_expired_at_49h() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order_expiry(escrow_addr, token_addr, 1000_u256, 48 * 60 * 60);
+        start_cheat_block_timestamp_global(49 * 60 * 60);
+        let r = escrow_at(escrow_addr).refund_expired_order(id);
+        stop_cheat_block_timestamp_global();
+        assert(r.is_ok(), 'expired at 49h');
+    }
+
+    #[test]
+    fn test_default_expiry_is_96h() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+        let order = escrow_at(escrow_addr).get_order_details(id).unwrap();
+        assert(order.expiry_seconds == 96 * 60 * 60, 'default expiry = 96h');
+    }
+
+    // ================================================================
+    //  SECTION 17 — Arbitrator rotation
+    // ================================================================
+
+    #[test]
+    fn test_old_arbitrator_cannot_rule_after_rotation() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+
+        start_cheat_caller_address(escrow_addr, admin());
+        escrow_at(escrow_addr).update_arbitrator(new_arbitrator()).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).raise_dispute(id).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+
+        start_cheat_caller_address(escrow_addr, arbitrator());
+        let r = escrow_at(escrow_addr).rule_dispute(id, Resolution::ReleasedToFarmer, 0);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r == Result::Err(EscrowError::NotArbitrator), 'old arb blocked');
+    }
+
+    #[test]
+    fn test_new_arbitrator_can_rule_after_rotation() {
+        let (escrow_addr, token_addr) = setup();
+        let id = create_funded_order(escrow_addr, token_addr, 1000_u256);
+
+        start_cheat_caller_address(escrow_addr, admin());
+        escrow_at(escrow_addr).update_arbitrator(new_arbitrator()).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+
+        start_cheat_caller_address(escrow_addr, buyer());
+        escrow_at(escrow_addr).raise_dispute(id).unwrap();
+        stop_cheat_caller_address(escrow_addr);
+
+        start_cheat_caller_address(escrow_addr, new_arbitrator());
+        let r = escrow_at(escrow_addr).rule_dispute(id, Resolution::ReleasedToFarmer, 0);
+        stop_cheat_caller_address(escrow_addr);
+        assert(r.is_ok(), 'new arb can rule');
+    }
 }
