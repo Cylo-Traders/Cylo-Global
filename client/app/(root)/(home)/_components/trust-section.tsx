@@ -30,7 +30,7 @@ const Testimonies = () => {
   return (
     <section
       id="trust"
-      className="bg-secondary/50 mb-16 border-y py-10 md:mb-40 md:py-32"
+      className="bg-secondary/50 dark:bg-[#0f1a10]/60 dark:border-primary/10 mb-16 border-y py-10 md:mb-40 md:py-32"
     >
       <Wrapper>
         <div className="grid grid-cols-1 gap-10 md:gap-20 lg:grid-cols-2 lg:gap-10">
@@ -79,10 +79,10 @@ const Testimonies = () => {
                   </span>
                 </div>
                 <blockquote className="font-display relative text-base leading-[1.6] font-medium italic">
-                  <p className="before:content-['\u201c'] after:content-['\u201d'] sm:before:absolute sm:before:right-full">
-                    {siteConfig.title} makes selling my crops easy and secure! I
-                    love that I can reach buyers directly and get paid quickly
-                    without worrying about payment issues.
+                  <p>
+                    &ldquo;{siteConfig.title} makes selling my crops easy and
+                    secure! I love that I can reach buyers directly and get paid
+                    quickly without worrying about payment issues.&rdquo;
                   </p>
                 </blockquote>
               </div>

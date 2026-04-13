@@ -57,7 +57,7 @@ const WhyChooseUs = () => {
                           className="bg-secondary aspect-[655/680] w-full object-cover object-center"
                           data-nimg="1"
                           sizes="(min-width: 1024px) 41rem, 31rem"
-                          src="https://images.pexels.com/photos/2933243/pexels-photo-2933243.jpeg?auto=compress&cs=tinysrgb&w=1920"
+                          src="/images/market-hero.avif"
                         />
                       </foreignObject>
                     </g>
@@ -89,7 +89,7 @@ const WhyChooseUs = () => {
             {benefits.map((benefit, index) => (
               <li key={index} className="group mt-10 first:mt-0">
                 <div style={{ opacity: 1, transform: "none" }}>
-                  <div className="after:bg-border relative pt-10 group-first:pt-0 before:absolute before:top-0 before:left-0 before:h-px before:w-6 before:bg-neutral-950 group-first:before:hidden after:absolute after:top-0 after:right-0 after:left-8 after:h-px group-first:after:hidden">
+                  <div className="after:bg-border relative pt-10 group-first:pt-0 before:absolute before:top-0 before:left-0 before:h-px before:w-6 before:bg-foreground group-first:before:hidden after:absolute after:top-0 after:right-0 after:left-8 after:h-px group-first:after:hidden">
                     <strong className="text-foreground font-semibold">
                       {benefit.title}{" "}
                     </strong>

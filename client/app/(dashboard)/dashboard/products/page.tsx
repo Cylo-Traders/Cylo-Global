@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import Image from "next/image";
 import { Plus, Pencil, Trash2, MoreHorizontal, Eye, EyeOff } from "lucide-react";
+import { ColumnDef } from "@tanstack/react-table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -12,7 +12,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
   DialogContent,
@@ -32,11 +31,110 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { DataTable } from "@/components/shared/data-table";
 import { categories } from "@/lib/utils";
 import productsData from "@/lib/data/products.json";
 import type { IProduct } from "@/lib/types";
 
 const products = productsData as IProduct[];
+
+const columns: ColumnDef<IProduct>[] = [
+  {
+    accessorKey: "name",
+    header: "Product",
+    cell: ({ row }) => {
+      const p = row.original;
+      return (
+        <div className="flex items-center gap-3">
+          <div className="relative size-10 shrink-0 overflow-hidden rounded-lg">
+            <Image src={p.image} alt={p.name} fill className="object-cover" sizes="40px" />
+          </div>
+          <div>
+            <p className="text-sm font-medium">{p.name}</p>
+            <p className="text-xs text-muted-foreground">/{p.unit}</p>
+          </div>
+        </div>
+      );
+    },
+  },
+  {
+    accessorKey: "category",
+    header: "Category",
+    cell: ({ getValue }) => (
+      <span className="text-sm capitalize">{getValue() as string}</span>
+    ),
+  },
+  {
+    accessorKey: "price",
+    header: "Price",
+    cell: ({ row }) => (
+      <span className="text-sm font-medium">
+        ${row.original.price.toFixed(2)}{" "}
+        <span className="text-xs text-muted-foreground">{row.original.currency}</span>
+      </span>
+    ),
+  },
+  {
+    accessorKey: "stockQuantity",
+    header: "Stock",
+    cell: ({ getValue }) => <span className="text-sm">{getValue() as number}</span>,
+  },
+  {
+    accessorKey: "isAvailable",
+    header: "Status",
+    enableGlobalFilter: false,
+    cell: ({ getValue }) =>
+      getValue() ? (
+        <Badge variant="success">Active</Badge>
+      ) : (
+        <Badge variant="secondary">Inactive</Badge>
+      ),
+  },
+  {
+    id: "actions",
+    header: "",
+    enableSorting: false,
+    enableGlobalFilter: false,
+    cell: ({ row }) => {
+      const p = row.original;
+      return (
+        <div className="flex justify-end">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon">
+                <MoreHorizontal className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem className="gap-2">
+                <Pencil className="size-4" />
+                Edit
+              </DropdownMenuItem>
+              <DropdownMenuItem className="gap-2">
+                {p.isAvailable ? (
+                  <>
+                    <EyeOff className="size-4" />
+                    Deactivate
+                  </>
+                ) : (
+                  <>
+                    <Eye className="size-4" />
+                    Activate
+                  </>
+                )}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem className="gap-2 text-destructive">
+                <Trash2 className="size-4" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      );
+    },
+  },
+];
 
 function AddProductDialog() {
   return (
@@ -101,6 +199,10 @@ function AddProductDialog() {
             <Input id="stock" type="number" placeholder="0" />
           </div>
           <div className="grid gap-2">
+            <Label htmlFor="desc">Description</Label>
+            <Textarea id="desc" placeholder="Describe your product..." rows={3} />
+          </div>
+          <div className="grid gap-2">
             <Label htmlFor="image">Image URL</Label>
             <Input id="image" placeholder="https://..." />
           </div>
@@ -124,89 +226,12 @@ export default function ProductsManagementPage() {
         <AddProductDialog />
       </div>
 
-      <div className="rounded-2xl border bg-card">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b text-left text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                <th className="px-6 py-4">Product</th>
-                <th className="px-6 py-4">Category</th>
-                <th className="px-6 py-4">Price</th>
-                <th className="px-6 py-4">Stock</th>
-                <th className="px-6 py-4">Status</th>
-                <th className="px-6 py-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {products.map((product) => (
-                <tr key={product.id} className="hover:bg-accent/50">
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="relative size-10 overflow-hidden rounded-lg">
-                        <Image src={product.image} alt={product.name} fill className="object-cover" sizes="40px" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium">{product.name}</p>
-                        <p className="text-xs text-muted-foreground">/{product.unit}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="text-sm capitalize">{product.category}</span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="text-sm font-medium">${product.price.toFixed(2)}</span>
-                    <span className="ml-1 text-xs text-muted-foreground">{product.currency}</span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="text-sm">{product.stockQuantity}</span>
-                  </td>
-                  <td className="px-6 py-4">
-                    {product.isAvailable ? (
-                      <Badge variant="success">Active</Badge>
-                    ) : (
-                      <Badge variant="secondary">Inactive</Badge>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon">
-                          <MoreHorizontal className="size-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem className="gap-2">
-                          <Pencil className="size-4" />
-                          Edit
-                        </DropdownMenuItem>
-                        <DropdownMenuItem className="gap-2">
-                          {product.isAvailable ? (
-                            <>
-                              <EyeOff className="size-4" />
-                              Deactivate
-                            </>
-                          ) : (
-                            <>
-                              <Eye className="size-4" />
-                              Activate
-                            </>
-                          )}
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem className="gap-2 text-destructive">
-                          <Trash2 className="size-4" />
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <DataTable
+        columns={columns}
+        data={products}
+        searchPlaceholder="Search by name or category..."
+        pageSize={8}
+      />
     </div>
   );
 }

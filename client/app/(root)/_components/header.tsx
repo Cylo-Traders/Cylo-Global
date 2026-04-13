@@ -6,24 +6,13 @@ import { siteConfig } from "@/config/site.config";
 import ConnectWallet from "@/components/shared/connect-wallet";
 import { Separator } from "@/components/ui/separator";
 import CartSidebar from "./cart-sidebar";
+import { ThemeToggle } from "@/components/shared/theme-toggle";
 
 const navItems = [
-  {
-    title: "Home",
-    href: "/",
-  },
-  {
-    title: "About",
-    href: "/#how-it-works",
-  },
-  {
-    title: "Marketplace",
-    href: "/market",
-  },
-  {
-    title: "Contact Us",
-    href: "/",
-  },
+  { title: "Home", href: "/" },
+  { title: "About", href: "/about" },
+  { title: "Marketplace", href: "/market" },
+  { title: "Contact Us", href: "/contact" },
 ];
 
 const Header = () => {
@@ -60,12 +49,12 @@ const Header = () => {
           ))}
         </ul>
 
-        <div className="flex w-full max-w-[180px] items-center justify-end lg:max-w-[240px]">
+        <div className="flex w-full max-w-[220px] items-center justify-end gap-1 lg:max-w-[280px]">
+          <ThemeToggle />
+          <Separator orientation="vertical" className="!h-5 mx-1" />
           <ConnectWallet />
-          <div className="ml-3 flex items-center gap-3 sm:ml-4 sm:gap-4">
-            <Separator orientation="vertical" className="!h-5" />
-            <CartSidebar />
-          </div>
+          <Separator orientation="vertical" className="!h-5 mx-1" />
+          <CartSidebar />
         </div>
       </Wrapper>
     </header>
