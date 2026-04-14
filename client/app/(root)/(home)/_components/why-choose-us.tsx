@@ -57,7 +57,7 @@ const WhyChooseUs = () => {
                           className="bg-secondary aspect-[655/680] w-full object-cover object-center"
                           data-nimg="1"
                           sizes="(min-width: 1024px) 41rem, 31rem"
-                          src="/images/market-hero.avif"
+                          src="https://images.pexels.com/photos/2933243/pexels-photo-2933243.jpeg?auto=compress&cs=tinysrgb&w=1920"
                         />
                       </foreignObject>
                     </g>
