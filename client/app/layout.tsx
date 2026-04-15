@@ -13,17 +13,27 @@ export const metadata: Metadata = {
   },
   description: siteConfig.description,
   icons: siteConfig.icons,
+  manifest: "/manifest.webmanifest",
   openGraph: {
     title: siteConfig.ogTitle,
     description: siteConfig.ogDescription,
     url: siteConfig.url,
     siteName: siteConfig.title,
     type: "website",
+    images: [
+      {
+        url: siteConfig.ogImage,
+        width: 1200,
+        height: 630,
+        alt: siteConfig.ogTitle,
+      },
+    ],
   },
   twitter: {
     card: siteConfig.tCard,
     title: siteConfig.tTitle,
     description: siteConfig.tDescription,
+    images: [siteConfig.ogImage],
   },
 };
 
