@@ -12,7 +12,7 @@ const ConnectWalletInner = dynamic(
     loading: () => (
       <div>
         <Button className="hidden sm:inline-flex" disabled>
-          Connect Wallet
+          Sign In
         </Button>
         <Button size="icon" className="inline-flex sm:hidden" disabled>
           <IoWalletOutline className="!size-5" />
