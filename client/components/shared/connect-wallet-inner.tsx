@@ -1,24 +1,37 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useAccount } from "@starknet-react/core";
-import WalletModal from "@/components/modals/wallet-modal";
+import { usePrivy } from "@privy-io/react-auth";
 import AccountModal from "@/components/modals/account-modal";
+import WalletModal from "@/components/modals/wallet-modal";
+import { useAuthStore } from "@/lib/store/auth";
 
 export function ConnectWalletInner() {
-  const { address, isConnected } = useAccount();
+  const { authenticated, ready } = usePrivy();
+  const { isOnboarded } = useAuthStore();
   const router = useRouter();
-  const prevConnected = useRef<boolean>(false);
 
   useEffect(() => {
-    if (isConnected && !prevConnected.current) {
-      router.push("/dashboard");
-    }
-    prevConnected.current = isConnected ?? false;
-  }, [isConnected, router]);
+    if (!ready || !authenticated) return;
 
-  if (isConnected && address) {
+    // Redirect only when the user just logged in — detected by either:
+    // 1. OAuth callback: Privy puts `privy_oauth_state` in the URL
+    // 2. Email login: we set a sessionStorage flag before calling login()
+    const url = new URL(window.location.href);
+    const isOAuthCallback = url.searchParams.has("privy_oauth_state");
+    const wasLoginInitiated = sessionStorage.getItem("privy_login_initiated");
+
+    if (isOAuthCallback || wasLoginInitiated) {
+      sessionStorage.removeItem("privy_login_initiated");
+      router.push(isOnboarded ? "/dashboard" : "/onboarding");
+    }
+  }, [ready, authenticated, isOnboarded, router]);
+
+  // Show account dropdown as soon as Privy says the user is authenticated.
+  // Wallet address may take a moment to populate (requires backend), so we
+  // don't gate on address — the modal gracefully handles the connecting state.
+  if (authenticated) {
     return <AccountModal />;
   }
 

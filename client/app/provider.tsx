@@ -10,7 +10,8 @@ import NextJsToploader from "nextjs-toploader";
 import { ThemeProvider } from "next-themes";
 
 import { Toaster } from "@/components/ui/sonner";
-import { StarknetProvider } from "@/components/providers/starknet-provider";
+import { PrivyProvider } from "@/components/providers/privy-provider";
+import { QueryProvider } from "@/components/providers/query-provider";
 
 interface GlobalProviderProps {
   children: ReactNode;
@@ -32,7 +33,8 @@ const GlobalProvider: FC<GlobalProviderProps> = ({ children }) => {
   return (
     <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
       <ReactLenis root options={{ autoRaf: false }} ref={lenisRef}>
-        <StarknetProvider>
+        <PrivyProvider>
+          <QueryProvider>
           <Analytics />
           <Toaster richColors theme="light" />
           <NextJsToploader
@@ -42,7 +44,8 @@ const GlobalProvider: FC<GlobalProviderProps> = ({ children }) => {
             color="var(--primary)"
           />
           {children}
-        </StarknetProvider>
+          </QueryProvider>
+        </PrivyProvider>
       </ReactLenis>
     </ThemeProvider>
   );

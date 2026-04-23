@@ -1,6 +1,7 @@
 import { DashboardSidebar } from "./_components/dashboard-sidebar";
 import { DashboardHeader } from "./_components/dashboard-header";
 import { DashboardFooter } from "@/components/shared/dashboard-footer";
+import { AuthGuard } from "@/components/shared/auth-guard";
 
 export const metadata = {
   title: {
@@ -17,7 +18,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </div>
       <div className="flex flex-1 flex-col overflow-hidden">
         <DashboardHeader />
-        <main className="flex-1 overflow-y-auto p-6" data-lenis-prevent>{children}</main>
+        <main className="flex-1 overflow-y-auto p-6" data-lenis-prevent>
+          <AuthGuard requiredRole="farmer">{children}</AuthGuard>
+        </main>
         <DashboardFooter />
       </div>
     </div>
