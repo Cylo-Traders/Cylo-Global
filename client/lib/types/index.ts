@@ -84,3 +84,59 @@ export interface INotification {
   read: boolean;
   createdAt: string;
 }
+
+export interface IPayout {
+  id: string;
+  product: string;
+  gross: number;
+  fee: number;
+  net: number;
+  token: "USDC" | "STRK";
+  status: OrderStatus;
+  txHash: string | null;
+  date: string;
+}
+
+export interface IEarningsSummary {
+  totalEarned: number;
+  pendingEarnings: number;
+  totalFees: number;
+  totalWithdrawn: number;
+}
+
+export interface IMonthlyEarning {
+  month: string;
+  gross: number;
+  net: number;
+}
+
+export interface IDashboardStats {
+  totalRevenue: number;
+  activeProducts: number;
+  totalOrders: number;
+  pendingOrders: number;
+  earningsData: IMonthlyEarning[];
+  ordersData: { month: string; completed: number; pending: number; refunded: number }[];
+  recentOrders: IOrder[];
+}
+
+export interface IAdminUser {
+  wallet: string;
+  privyUserId: string;
+  displayName: string;
+  role: UserRole;
+  country: string;
+  joinedAt: string;
+  totalOrders: number;
+  totalVolume: number;
+  status: "active" | "suspended";
+}
+
+export interface IAdminStats {
+  totalUsers: number;
+  totalFarmers: number;
+  totalBuyers: number;
+  totalOrders: number;
+  totalVolume: number;
+  platformFees: number;
+}
