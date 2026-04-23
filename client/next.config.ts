@@ -1,6 +1,21 @@
 import type { NextConfig } from "next";
 
+const STUB = "./lib/stubs/empty.js";
+
 const nextConfig: NextConfig = {
+  // Starkzap includes optional sub-features (Solana bridge, Tongo confidential computing,
+  // Hyperlane) that dynamically import packages we don't use in Cylo. Point them at an
+  // empty stub so Turbopack doesn't error on missing peer deps.
+  turbopack: {
+    resolveAlias: {
+      "@fatsolutions/tongo-sdk": STUB,
+      "@hyperlane-xyz/sdk": STUB,
+      "@hyperlane-xyz/registry": STUB,
+      "@hyperlane-xyz/utils": STUB,
+      "@solana/web3.js": STUB,
+    },
+  },
+
   images: {
     remotePatterns: [
       {
