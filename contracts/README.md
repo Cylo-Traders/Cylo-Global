@@ -26,8 +26,8 @@ Run: `sncast --account <my_account> \
 
 #### Declared
 
-  `class-hash: class-hash 0x02b77230ad2b511f10f6f1a46da59e19e17ea86dd23fa0dcef5c3258434b57f1`
+  `class-hash: 0x437e0e74b0bcf4dd604d7ba8f4b72e09adb90f9f62a630f43bbe3a0b55d7940`
 
 #### Deployed
 
-`Contract Address: 0x035061664df9ab8e55a6701b8a47eb87a3d040dbdf766a12897dae82e7f9f7ad`
+`Contract Address: 0x073adf6bf463c6d013952d2c4d3e56c8a2661c1504f3e33054a2e754baa401e3`
