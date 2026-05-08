@@ -29,32 +29,51 @@ pub fn compute_split(net_amount: u256, farmer_split_bps: u16) -> (u256, u256) {
 }
 
 // ── Token helpers ─────────────────────────────────────────────
+//
+// Both helpers check the ERC20 return bool. OpenZeppelin ERC20s revert on
+// failure — but non-compliant tokens can return false without reverting,
+// which would otherwise leave the escrow thinking funds moved when they
+// didn't. Bubble TokenTransferFailed instead.
 
 pub fn transfer_from(
     token: ContractAddress,
     from: ContractAddress,
     to: ContractAddress,
     amount: u256,
-) {
+) -> Result<(), EscrowError> {
     let erc20 = IERC20Dispatcher { contract_address: token };
-    erc20.transfer_from(from, to, amount);
+    let ok = erc20.transfer_from(from, to, amount);
+    if !ok {
+        return Result::Err(EscrowError::TokenTransferFailed);
+    }
+    Result::Ok(())
 }
 
-pub fn transfer_out(token: ContractAddress, to: ContractAddress, amount: u256) {
+pub fn transfer_out(
+    token: ContractAddress,
+    to: ContractAddress,
+    amount: u256,
+) -> Result<(), EscrowError> {
     let erc20 = IERC20Dispatcher { contract_address: token };
-    erc20.transfer(to, amount);
+    let ok = erc20.transfer(to, amount);
+    if !ok {
+        return Result::Err(EscrowError::TokenTransferFailed);
+    }
+    Result::Ok(())
 }
 
 // ── Core operations ───────────────────────────────────────────
 
 /// Validate inputs, pull funds from buyer, deduct fee, return Order.
 /// expiry_seconds = 0 → use DEFAULT_EXPIRY_SECONDS (96h).
+/// order_ref = 0 means "no caller-supplied reference".
 pub fn build_order(
     buyer: ContractAddress,
     farmer: ContractAddress,
     token: ContractAddress,
     amount: u256,
     expiry_seconds: u64,
+    order_ref: felt252,
     supported_tokens: @Array<ContractAddress>,
     fee_collector: ContractAddress,
 ) -> Result<(Order, u256, u256), EscrowError> {
@@ -77,10 +96,10 @@ pub fn build_order(
     }
 
     let escrow = get_contract_address();
-    transfer_from(token, buyer, escrow, amount);
+    transfer_from(token, buyer, escrow, amount)?;
 
     let (fee_amount, net_amount) = compute_fee(amount);
-    transfer_out(token, fee_collector, fee_amount);
+    transfer_out(token, fee_collector, fee_amount)?;
 
     let zero_address: ContractAddress = 0.try_into().unwrap();
     let order = Order {
@@ -94,6 +113,7 @@ pub fn build_order(
         disputed_by: zero_address,
         dispute_timestamp: 0,
         farmer_split_bps: 0,
+        order_ref,
     };
 
     Result::Ok((order, net_amount, fee_amount))
@@ -111,7 +131,7 @@ pub fn complete_order(
         return Result::Err(EscrowError::OrderNotPending);
     }
     order.status = OrderStatus::Completed;
-    transfer_out(order.token, order.farmer, order.amount);
+    transfer_out(order.token, order.farmer, order.amount)?;
     Result::Ok(order)
 }
 
@@ -125,7 +145,7 @@ pub fn expire_order(mut order: Order) -> Result<Order, EscrowError> {
         return Result::Err(EscrowError::OrderNotExpired);
     }
     order.status = OrderStatus::Refunded;
-    transfer_out(order.token, order.buyer, order.amount);
+    transfer_out(order.token, order.buyer, order.amount)?;
     Result::Ok(order)
 }
 
@@ -175,10 +195,10 @@ pub fn resolve_dispute(
     };
 
     if farmer_amount > 0 {
-        transfer_out(order.token, order.farmer, farmer_amount);
+        transfer_out(order.token, order.farmer, farmer_amount)?;
     }
     if buyer_amount > 0 {
-        transfer_out(order.token, order.buyer, buyer_amount);
+        transfer_out(order.token, order.buyer, buyer_amount)?;
     }
 
     order.status = OrderStatus::DisputeResolved;
