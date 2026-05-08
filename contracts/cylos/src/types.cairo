@@ -37,6 +37,10 @@ pub struct Order {
     pub disputed_by: ContractAddress,
     pub dispute_timestamp: u64,
     pub farmer_split_bps: u16,
+    /// Caller-supplied reference (typically the backend's DB order UUID as a
+    /// felt). Emitted verbatim in OrderCreated so the indexer can do an exact
+    /// match without fuzzy logic. Pass 0 to opt out.
+    pub order_ref: felt252,
 }
 
 // ── Contract errors ───────────────────────────────────────────
@@ -66,6 +70,9 @@ pub enum EscrowError {
 pub struct OrderCreated {
     #[key]
     pub order_id: u64,
+    /// Caller-supplied reference (DB UUID as felt252). Indexer uses this for
+    /// exact order matching. Zero if the caller didn't provide one.
+    pub order_ref: felt252,
     pub buyer: ContractAddress,
     pub farmer: ContractAddress,
     pub token: ContractAddress,
